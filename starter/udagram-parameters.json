@@ -1,6 +1,26 @@
 [
-	{
-		"ParameterKey": "Add you parameters here",
-		"ParameterValue": "Add you parameters here"
-	}
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "udagram"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t2.micro"
+  },
+  {
+    "ParameterKey": "BastionAllowedCIDR",
+    "ParameterValue": "0.0.0.0/0"
+  },
+  {
+    "ParameterKey": "MinInstances",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "MaxInstances",
+    "ParameterValue": "4"
+  },
+  {
+    "ParameterKey": "DesiredInstances",
+    "ParameterValue": "4"
+  }
 ]

@@ -1,18 +1,390 @@
-Description: CD12352 - Infrastructure as Code Project - Udagram
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Udagram Application Stack
+  Deploys: S3 bucket, IAM role, security groups, Launch Template,
+  Auto Scaling Group (4 EC2s across 2 private subnets), Application
+  Load Balancer, Bastion Host, and CloudFront distribution.
+  Imports networking outputs from the network stack.
 
 Parameters:
-  # Add your parameters here
+  EnvironmentName:
+    Description: Environment name — must match the network stack EnvironmentName
+    Type: String
+    Default: udagram
+
+  AmiId:
+    Description: Ubuntu 22.04 LTS AMI ID for us-east-1
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+
+  BastionAllowedCIDR:
+    Description: Your home IP CIDR for SSH access to Bastion Host (e.g. 1.2.3.4/32)
+    Type: String
+    Default: 0.0.0.0/0
+
+  MinInstances:
+    Description: Minimum number of EC2 instances in the Auto Scaling Group
+    Type: Number
+    Default: 2
+    MinValue: 1
+
+  MaxInstances:
+    Description: Maximum number of EC2 instances in the Auto Scaling Group
+    Type: Number
+    Default: 4
+    MinValue: 2
+
+  DesiredInstances:
+    Description: Desired number of EC2 instances in the Auto Scaling Group
+    Type: Number
+    Default: 4
+    MinValue: 1
 
 Resources:
-  # Add your resources here
-  # We include a portion of the LaunchTemplate resource so you can use the UserData.
-  WebAppLaunchTemplate:
+
+  # ─── S3 BUCKET FOR STATIC CONTENT ─────────────────────────────────────────
+
+  UdagramBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${EnvironmentName}-static-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-bucket"
+
+  UdagramBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UdagramBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${UdagramBucket}/*"
+
+  # ─── IAM ROLE FOR EC2 → S3 ACCESS ─────────────────────────────────────────
+
+  EC2S3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-s3-rw-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${UdagramBucket}"
+                  - !Sub "arn:aws:s3:::${UdagramBucket}/*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-ec2-role"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2S3Role
+
+  # ─── SECURITY GROUP: LOAD BALANCER ────────────────────────────────────────
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${EnvironmentName}-alb-sg"
+      GroupDescription: Allow HTTP from the internet to the ALB
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb-sg"
+
+  # ─── SECURITY GROUP: EC2 WEB SERVERS ──────────────────────────────────────
+
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${EnvironmentName}-web-sg"
+      GroupDescription: Allow HTTP from ALB; unrestricted outbound for updates
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-web-sg"
+
+  # ─── SECURITY GROUP: BASTION HOST ─────────────────────────────────────────
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${EnvironmentName}-bastion-sg"
+      GroupDescription: Allow SSH from home IP only
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-id"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref BastionAllowedCIDR
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-bastion-sg"
+
+  # ─── BASTION HOST (PUBLIC SUBNET 1) ──────────────────────────────────────
+
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref AmiId
+      SubnetId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-public-subnet-1"
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-bastion"
+
+  # ─── LAUNCH TEMPLATE ──────────────────────────────────────────────────────
+
+  WebServerLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
-    Properties: 
+    Properties:
+      LaunchTemplateName: !Sub "${EnvironmentName}-launch-template"
       LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+        SecurityGroupIds:
+          - !Ref WebServerSecurityGroup
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 10
+              VolumeType: gp2
+              DeleteOnTermination: true
         UserData:
-          Fn::Base64: |
+          Fn::Base64: !Sub |
             #!/bin/bash
+            set -e
             apt-get update -y
-            sudo apt-get install nginx -y
-            service nginx start
+            apt-get install -y nginx awscli
+
+            # Pull static content from S3
+            aws s3 cp s3://${UdagramBucket}/index.html /var/www/html/index.html || \
+              echo "<h1>It works! Udagram, Udacity</h1>" > /var/www/html/index.html
+
+            # Start and enable nginx
+            systemctl start nginx
+            systemctl enable nginx
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${EnvironmentName}-web-server"
+
+  # ─── TARGET GROUP ─────────────────────────────────────────────────────────
+
+  WebServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${EnvironmentName}-tg"
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-id"
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-tg"
+
+  # ─── APPLICATION LOAD BALANCER ────────────────────────────────────────────
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${EnvironmentName}-alb"
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-public-subnet-1"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-public-subnet-2"
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb"
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebServerTargetGroup
+
+  # ─── AUTO SCALING GROUP ───────────────────────────────────────────────────
+
+  WebServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${EnvironmentName}-asg"
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-private-subnet-1"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-private-subnet-2"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebServerLaunchTemplate
+        Version: !GetAtt WebServerLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinInstances
+      MaxSize: !Ref MaxInstances
+      DesiredCapacity: !Ref DesiredInstances
+      TargetGroupARNs:
+        - !Ref WebServerTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-asg-instance"
+          PropagateAtLaunch: true
+
+  # ─── CLOUDFRONT DISTRIBUTION ──────────────────────────────────────────────
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${EnvironmentName} CloudFront distribution"
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          # Origin 1: S3 static content
+          - Id: S3Origin
+            DomainName: !GetAtt UdagramBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          # Origin 2: ALB for dynamic / live traffic
+          - Id: ALBOrigin
+            DomainName: !GetAtt ApplicationLoadBalancer.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: ALBOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: /static/*
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            Compress: true
+        PriceClass: PriceClass_100
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-cf"
+
+# ─── OUTPUTS ─────────────────────────────────────────────────────────────────
+
+Outputs:
+
+  LoadBalancerURL:
+    Description: Public URL of the Application Load Balancer
+    Value: !Sub "http://${ApplicationLoadBalancer.DNSName}"
+    Export:
+      Name: !Sub "${EnvironmentName}-alb-url"
+
+  CloudFrontURL:
+    Description: CloudFront distribution domain name
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Export:
+      Name: !Sub "${EnvironmentName}-cf-url"
+
+  S3BucketName:
+    Description: Name of the S3 static content bucket
+    Value: !Ref UdagramBucket
+    Export:
+      Name: !Sub "${EnvironmentName}-s3-bucket"
+
+  BastionPublicIP:
+    Description: Public IP of the Bastion Host
+    Value: !GetAtt BastionHost.PublicIp
+    Export:
+      Name: !Sub "${EnvironmentName}-bastion-ip"
+
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling Group
+    Value: !Ref WebServerAutoScalingGroup
+    Export:
+      Name: !Sub "${EnvironmentName}-asg-name"

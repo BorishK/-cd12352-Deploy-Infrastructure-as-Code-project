@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Udagram</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: #eee;
+    }
+    .card {
+      text-align: center;
+      padding: 3rem 4rem;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      backdrop-filter: blur(12px);
+    }
+    h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: #fff; }
+    p  { font-size: 1.1rem; color: #aac; margin-bottom: 1.5rem; }
+    .badge {
+      display: inline-block;
+      background: #e67e22;
+      color: #fff;
+      padding: 0.3rem 1rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>It works! Udagram, Udacity</h1>
+    <p>Served via nginx on EC2 &mdash; static content pulled from S3</p>
+    <span class="badge">CloudFormation IaC Project</span>
+  </div>
+</body>
+</html>
