@@ -202,3 +202,28 @@ Resources that incur charges while running:
 | 1× t2.micro Bastion | ~$0.0116/hr |
 
 **Always run `python delete.py all` when finished.**
+
+
+## Deployment URLs
+- **Load Balancer:** http://udagram-alb-1063227203.us-east-1.elb.amazonaws.com
+- **CloudFront:** https://d1s4k4es3icrcj.cloudfront.net
+
+## Deployment Evidence Screenshots
+
+### Website via Load Balancer URL
+![ALB Working](screenshots/alb-working.png)
+
+### Website via CloudFront URL
+![CloudFront Working](screenshots/cloudfront-shot.png)
+
+### CloudFormation Network Stack Outputs
+![Network Stack Outputs](screenshots/cfn-network-outputs.png)
+
+### CloudFormation App Stack Outputs
+![App Stack Outputs](screenshots/cfn-app-outputs.png)
+
+### CloudFormation Stacks Overview
+![CloudFormation Stacks](screenshots/cloudformation.png)
+
+### S3 Bucket Contents
+![S3 Bucket](screenshots/s3-bucket.png)
