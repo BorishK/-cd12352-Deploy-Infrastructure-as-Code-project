@@ -222,16 +222,27 @@ Resources:
           Fn::Base64: !Sub |
             #!/bin/bash
             set -e
+
+            # Update and install dependencies
             apt-get update -y
             apt-get install -y nginx awscli
-
-            # Pull static content from S3
-            aws s3 cp s3://${UdagramBucket}/index.html /var/www/html/index.html || \
-              echo "<h1>It works! Udagram, Udacity</h1>" > /var/www/html/index.html
 
             # Start and enable nginx
             systemctl start nginx
             systemctl enable nginx
+
+            # Wait for instance profile credentials to be available
+            sleep 15
+
+            # Programmatically download index.html from S3
+            # No inline fallback - content MUST be served from S3
+            aws s3 cp s3://${UdagramBucket}/index.html /var/www/html/index.html
+
+            # Sync any additional static files from S3
+            aws s3 sync s3://${UdagramBucket}/ /var/www/html/ --exclude "*.py"
+
+            # Reload nginx to serve updated content
+            systemctl reload nginx
         TagSpecifications:
           - ResourceType: instance
             Tags:
